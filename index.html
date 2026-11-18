@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101018">
+<title>PeakCut AI</title>
+<style>
+:root{color-scheme:dark;--bg:#101018;--card:#1a1a26;--muted:#a6a6b5;--accent:#9b7cff}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(150deg,#171327,#0e1018 55%);color:#fff;font:16px system-ui,-apple-system,Segoe UI,sans-serif}
+main{max-width:760px;margin:auto;padding:22px 16px 48px}.brand{font-size:29px;font-weight:850;letter-spacing:-1px}.brand span{color:var(--accent)}.sub{color:var(--muted);margin:4px 0 20px}
+.card{background:#1a1a26;border:1px solid #333044;border-radius:18px;padding:16px;margin:14px 0}
+label{display:block;font-weight:650;margin:12px 0 7px}input,select,button{font:inherit}input[type=file],select,input[type=number]{width:100%;padding:12px;border-radius:11px;border:1px solid #454258;background:#11111a;color:#fff}
+button{border:0;border-radius:13px;padding:14px 16px;background:var(--accent);color:#100d1b;font-weight:800;width:100%;margin-top:14px}
+button:disabled{opacity:.45}video{width:100%;border-radius:12px;background:#08080d;max-height:360px;margin-top:12px}
+.note{font-size:13px;color:var(--muted);line-height:1.5}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+#status{white-space:pre-wrap;color:#ddd;margin-top:12px}.clip{padding:12px;border:1px solid #454258;border-radius:12px;margin-top:10px}.clip a{color:#c7b8ff}
+progress{width:100%;height:10px;accent-color:var(--accent)}.tag{display:inline-block;background:#29233e;color:#c7b8ff;padding:4px 9px;border-radius:20px;font-size:12px}
+</style></head>
+<body><main>
+<div class="brand">✂️ PeakCut<span> AI</span></div>
+<div class="sub">Find loud, exciting moments and turn them into vertical clips.</div>
+<div class="card">
+ <span class="tag">FREE • Runs in your browser</span>
+ <label for="file">1. Choose a video</label><input id="file" type="file" accept="video/*">
+ <video id="preview" controls playsinline></video>
+ <div class="row">
+  <div><label for="length">Clip length</label><select id="length"><option>15</option><option selected>30</option><option>45</option><option>60</option></select></div>
+  <div><label for="count">Number of clips</label><select id="count"><option>1</option><option selected>3</option><option>5</option></select></div>
+ </div>
+ <label><input id="vertical" type="checkbox" checked> Make vertical 9:16</label>
+ <button id="analyze" disabled>✨ Find exciting moments</button>
+ <div id="status" class="note">Choose a video to begin.</div>
+ <progress id="progress" value="0" max="100" hidden></progress>
+</div>
+<div class="card"><b>Your clips</b><div id="results" class="note">Your finished videos will appear here.</div></div>
+<div class="note">This free starter detects high-audio-energy moments (cheers, loud reactions, music peaks). It is not semantic AI and cannot guarantee viral moments. Export happens in real time in your browser; keep this page open. Large videos may exceed your phone's memory. Use videos you have permission to edit and publish.</div>
+</main>
+<script>
+const fileEl=document.querySelector('#file'), video=document.querySelector('#preview'), analyze=document.querySelector('#analyze');
+const statusEl=document.querySelector('#status'), progressEl=document.querySelector('#progress'), results=document.querySelector('#results');
+let fileUrl=null, audioCtx=null;
+fileEl.addEventListener('change',()=>{
+ if(fileUrl)URL.revokeObjectURL(fileUrl);
+ const f=fileEl.files[0]; if(!f)return;
+ fileUrl=URL.createObjectURL(f);video.src=fileUrl;analyze.disabled=false;results.textContent='';statusEl.textContent='Video ready. Tap Find exciting moments.';
+});
+function getPeaks(buf,duration,clipLen,count){
+ const sr=buf.sampleRate, ch=[];for(let c=0;c<buf.numberOfChannels;c++)ch.push(buf.getChannelData(c));
+ const step=0.5, scores=[];
+ for(let t=0;t<duration;t+=step){
+  const a=Math.floor(t*sr),b=Math.min(Math.floor((t+step)*sr),ch[0].length);let sum=0,n=0;
+  for(let i=a;i<b;i+=8){let v=0;for(const d of ch)v+=d[i]*d[i];sum+=v/ch.length;n++}
+  scores.push({t,score:n?Math.sqrt(sum/n):0});
+ }
+ const candidates=[];
+ for(let i=0;i<scores.length;i++){
+  const center=scores[i].t+step/2,start=Math.max(0,Math.min(duration-clipLen,center-clipLen/2));
+  let score=0;for(const p of scores)if(p.t>=start&&p.t<start+clipLen)score+=p.score;
+  candidates.push({start,score});
+ }
+ candidates.sort((a,b)=>b.score-a.score);
+ const chosen=[];for(const c of candidates){if(chosen.every(x=>Math.abs(x.start-c.start)>clipLen*.8))chosen.push(c);if(chosen.length>=count)break}
+ return chosen.sort((a,b)=>a.start-b.start);
+}
+async function exportClip(start,len,index,total){
+ return new Promise(async(resolve,reject)=>{
+  const outW=720,outH=1280,canvas=document.createElement('canvas');canvas.width=outW;canvas.height=outH;
+  const ctx=canvas.getContext('2d');const stream=canvas.captureStream(30);
+  let audioStream;
+  try{
+   const ac=new (window.AudioContext||window.webkitAudioContext)();
+   const source=ac.createMediaElementSource(video),dest=ac.createMediaStreamDestination();source.connect(dest);source.connect(ac.destination);
+   audioStream=dest.stream;audioCtx=ac;
+  }catch(e){reject(new Error('Your browser could not capture audio. Try a recent Chrome version.'));return}
+  audioStream.getAudioTracks().forEach(t=>stream.addTrack(t));
+  const mime=['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'].find(x=>MediaRecorder.isTypeSupported(x));
+  if(!mime){reject(new Error('Video export is not supported by this browser.'));return}
+  const rec=new MediaRecorder(stream,{mimeType:mime}),chunks=[];
+  rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
+  rec.onerror=()=>reject(new Error('Recording failed. Try a shorter clip.'));
+  rec.onstop=()=>{stream.getTracks().forEach(t=>t.stop());resolve(new Blob(chunks,{type:mime}))};
+  const vertical=document.querySelector('#vertical').checked;
+  const draw=()=>{
+   if(video.paused||video.ended)return;
+   ctx.fillStyle='#000';ctx.fillRect(0,0,outW,outH);
+   const vw=video.videoWidth,vh=video.videoHeight;
+   if(vertical){const scale=Math.max(outW/vw,outH/vh),w=vw*scale,h=vh*scale;ctx.drawImage(video,(outW-w)/2,(outH-h)/2,w,h)}
+   else {const scale=Math.min(outW/vw,outH/vh),w=vw*scale,h=vh*scale;ctx.drawImage(video,(outW-w)/2,(outH-h)/2,w,h)}
+   requestAnimationFrame(draw);
+  };
+  video.pause();video.currentTime=start;
+  await new Promise(r=>video.onseeked=r);
+  await audioCtx.resume();
+  rec.start();await video.play();draw();
+  const tick=()=>{if(video.currentTime>=start+len||video.ended){video.pause();rec.stop();}else requestAnimationFrame(tick)};
+  tick();
+  statusEl.textContent=`Rendering clip ${index} of ${total}… Keep this tab open.`;
+ });
+}
+analyze.addEventListener('click',async()=>{
+ const f=fileEl.files[0];if(!f)return;
+ if(!('AudioContext'in window||'webkitAudioContext'in window)){statusEl.textContent='Audio analysis is not supported by this browser.';return}
+ analyze.disabled=true;progressEl.hidden=false;progressEl.value=0;results.textContent='';
+ try{
+  statusEl.textContent='Analyzing audio… This may take a little while.';
+  const ab=await f.arrayBuffer();const AC=window.AudioContext||window.webkitAudioContext;const ac=new AC();
+  const decoded=await ac.decodeAudioData(ab.slice(0));const len=Number(document.querySelector('#length').value),num=Number(document.querySelector('#count').value);
+  if(decoded.duration<len)throw new Error('Video is shorter than the selected clip length.');
+  const peaks=getPeaks(decoded,decoded.duration,len,num);await ac.close();
+  if(!peaks.length)throw new Error('Could not find suitable moments.');
+  statusEl.textContent=`Found ${peaks.length} candidate moments. Exporting…`;
+  for(let i=0;i<peaks.length;i++){
+   video.currentTime=0;const blob=await exportClip(peaks[i].start,len,i+1,peaks.length);
+   const url=URL.createObjectURL(blob),name=`PeakCut_clip_${i+1}.webm`;
+   const div=document.createElement('div');div.className='clip';
+   div.innerHTML=`<b>Clip ${i+1}</b> · ${Math.round(peaks[i].start)}s start<br><a download="${name}">⬇ Download clip</a>`;
+   div.querySelector('a').href=url;results.appendChild(div);progressEl.value=((i+1)/peaks.length)*100;
+  }
+  statusEl.textContent='Done! Review your clips before posting.';
+ }catch(e){statusEl.textContent='Could not finish: '+e.message}
+ finally{analyze.disabled=false}
+});
+</script></body></html>
